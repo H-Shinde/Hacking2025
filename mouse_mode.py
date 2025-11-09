@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import mediapipe as mp
 from PyQt5.QtWidgets import QApplication, QWidget
-from PyQt5.QtGui import QPainter, QPen, QCursor
+from PyQt5.QtGui import QPainter, QPen, QCursor, QColor, QFont
 from PyQt5.QtCore import Qt, QTimer
 import pyautogui
 import time
@@ -23,23 +23,36 @@ class MouseMode(QWidget):
         self.hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7, min_tracking_confidence=0.7)
 
         self.gesture_cooldown = 0
-        self.smoothing_factor = 0.7  # More responsive (higher = faster response)
+        self.smoothing_factor = 0.7
         self.last_smooth_pos = None
         self.last_click_time = 0
-        self.click_cooldown = 0.3  # Prevent spam clicks
+        self.click_cooldown = 0.3
+        
+        # Improved click/drag states
+        self.is_dragging = False
+        self.left_click_held = False
+        self.was_pinched = False
+        self.pinch_start_time = 0
+        self.pinch_hold_threshold = 0.3  # Seconds to hold for drag vs click
+        
+        # For detecting quick releases
+        self.last_release_time = 0
+        self.double_click_threshold = 0.5  # Time for double click detection
 
-        # Disable PyAutoGUI failsafe and speed up
         pyautogui.FAILSAFE = False
-        pyautogui.PAUSE = 0  # Remove delays between pyautogui commands
+        pyautogui.PAUSE = 0
 
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
-        self.timer.start(5)  # Faster updates
+        self.timer.start(5)
 
         print("\n🖱️  MOUSE MODE ACTIVE")
         print("="*60)
         print("• Index finger = Move cursor")
-        print("• Pinch (thumb + index) = Left click")
+        print("• Quick pinch = Left click")
+        print("• Hold pinch (>0.3s) = Drag/Select")
+        print("• Double pinch = Double click")
+        print("• 🤟 3 fingers = Right click")
         print("• 🖖 4 fingers = Return to Menu")
         print("="*60 + "\n")
 
@@ -77,6 +90,33 @@ class MouseMode(QWidget):
         
         return sum(fingers)
 
+    def is_fist(self, landmarks, frame_shape):
+        """Check if hand is making a fist (all fingers closed)"""
+        fingers = []
+        
+        # Thumb - check if thumb is across palm
+        thumb_tip = landmarks.landmark[4]
+        thumb_mcp = landmarks.landmark[2]
+        if thumb_tip.x > thumb_mcp.x:  # Thumb across palm
+            fingers.append(0)
+        else:
+            fingers.append(1)
+        
+        # Other fingers - check if tips are below PIP joints
+        finger_tips = [8, 12, 16, 20]
+        finger_pips = [6, 10, 14, 18]
+        
+        for tip_id, pip_id in zip(finger_tips, finger_pips):
+            tip = landmarks.landmark[tip_id]
+            pip = landmarks.landmark[pip_id]
+            if tip.y > pip.y:  # Finger tip below PIP joint (closed)
+                fingers.append(0)
+            else:
+                fingers.append(1)
+        
+        # Fist if no fingers are extended
+        return sum(fingers) == 0
+
     def quit_mode(self):
         print("👋 Returning to menu...")
         self.cleanup()
@@ -94,6 +134,7 @@ class MouseMode(QWidget):
         if results.multi_hand_landmarks:
             h, w, _ = frame.shape
             lm = results.multi_hand_landmarks[0].landmark
+            current_time = time.time()
 
             # Check for quit gesture (4 fingers)
             extended_fingers = self.count_extended_fingers(results.multi_hand_landmarks[0], frame.shape)
@@ -104,37 +145,114 @@ class MouseMode(QWidget):
                 self.quit_mode()
                 return
 
+            # Check for right click gesture (3 fingers)
+            if extended_fingers == 3 and self.gesture_cooldown == 0:
+                if (current_time - self.last_click_time) > self.click_cooldown:
+                    pyautogui.rightClick()
+                    self.last_click_time = current_time
+                    self.gesture_cooldown = 30
+                    print("🖱️ Right Click!")
+                return
+
             # Index finger position
             ix, iy = int(lm[8].x * w), int(lm[8].y * h)
             tx, ty = int(lm[4].x * w), int(lm[4].y * h)
 
-            # Map to screen - use direct mapping for speed
+            # Map to screen
             screen_w, screen_h = pyautogui.size()
             sx = int(ix * (screen_w / w))
             sy = int(iy * (screen_h / h))
 
-            # Light smoothing for responsiveness
             smooth_x, smooth_y = self.smooth_position(sx, sy)
-            
-            # Move cursor directly without easing
             pyautogui.moveTo(smooth_x, smooth_y, duration=0)
 
-            # Check for pinch (click) with cooldown
+            # Calculate pinch distance
             dist = ((ix - tx)**2 + (iy - ty)**2)**0.5
-            current_time = time.time()
-            if dist < 40 and (current_time - self.last_click_time) > self.click_cooldown:
-                pyautogui.click()
-                self.last_click_time = current_time
-                print("🖱️ Click!")
+            is_pinched = dist < 40
+            
+            # Handle left click gestures
+            if is_pinched:
+                if not self.was_pinched:
+                    # Just started pinching - record start time
+                    self.pinch_start_time = current_time
+                    self.was_pinched = True
+                
+                # Check if this is a long press (drag) or should remain as potential click
+                pinch_duration = current_time - self.pinch_start_time
+                
+                if pinch_duration > self.pinch_hold_threshold and not self.is_dragging:
+                    # Start dragging after hold threshold
+                    pyautogui.mouseDown()
+                    self.left_click_held = True
+                    self.is_dragging = True
+                    print("🖱️ Drag started")
+            
+            # Handle release
+            else:  # not pinched
+                if self.was_pinched:
+                    pinch_duration = current_time - self.pinch_start_time
+                    
+                    if self.is_dragging:
+                        # Was dragging - release mouse
+                        pyautogui.mouseUp()
+                        self.left_click_held = False
+                        self.is_dragging = False
+                        print("🖱️ Drag ended")
+                    
+                    elif not self.left_click_held and pinch_duration < self.pinch_hold_threshold:
+                        # This was a quick pinch - handle as click
+                        if (current_time - self.last_release_time) < self.double_click_threshold:
+                            # Double click detected
+                            pyautogui.doubleClick()
+                            print("🖱️ Double Click!")
+                        else:
+                            # Single click
+                            pyautogui.click()
+                            print("🖱️ Left Click!")
+                        
+                        self.last_click_time = current_time
+                        self.last_release_time = current_time
+                    
+                    self.was_pinched = False
+                    self.left_click_held = False
 
         self.update()
 
     def paintEvent(self, event):
         painter = QPainter(self)
-        painter.setPen(QPen(Qt.white))
-        painter.drawText(10, 30, "🖱️  Mouse Mode | Point to move | Pinch to click | 🖖 4=Menu")
+        painter.setRenderHint(QPainter.Antialiasing)
+        
+        # Draw compact info panel with white opaque background
+        panel_width = 550
+        panel_height = 100
+        margin = 20
+        
+        # Semi-transparent white background
+        painter.setBrush(QColor(255, 255, 255, 230))  # White with opacity
+        painter.setPen(QPen(QColor(0, 0, 0, 150), 2))
+        painter.drawRoundedRect(margin, margin, panel_width, panel_height, 10, 10)
+        
+        # Status text
+        font = QFont('Arial', 12)
+        painter.setFont(font)
+        painter.setPen(QPen(Qt.black))
+        
+        status = "Ready"
+        if self.is_dragging:
+            status = "🔵 DRAGGING"
+        elif self.was_pinched and not self.is_dragging:
+            status = "⚪ READY TO CLICK"
+            
+        instructions = f"🖱️ Mouse Mode | Pinch=Click | Hold=Drag | 🤟 3=Right Click | 🖖 4=Menu | Status: {status}"
+        
+        # Wrap text if needed
+        painter.drawText(margin + 10, margin + 20, panel_width - 20, panel_height - 10, 
+                        Qt.AlignLeft | Qt.TextWordWrap, instructions)
 
     def cleanup(self):
+        # Release mouse button if held down
+        if self.left_click_held:
+            pyautogui.mouseUp()
         if self.cap:
             self.cap.release()
         if self.hands:

@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import mediapipe as mp
 from PyQt5.QtWidgets import QApplication, QWidget
-from PyQt5.QtGui import QPainter, QPen, QFont
+from PyQt5.QtGui import QPainter, QPen, QFont, QColor
 from PyQt5.QtCore import Qt, QTimer
 import subprocess
 import os
@@ -14,11 +14,11 @@ mp_hands = mp.solutions.hands
 class MainMenu(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Hand Control Menu")
+        self.setWindowTitle("Hand Control System")
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
         self.setAttribute(Qt.WA_TranslucentBackground)
         self.showFullScreen()
-
+        
         # Camera setup
         self.cap = cv2.VideoCapture(0)
         self.hands = mp_hands.Hands(max_num_hands=1, min_detection_confidence=0.7, min_tracking_confidence=0.7)
@@ -32,7 +32,7 @@ class MainMenu(QWidget):
         self.timer.start(16)
 
         print("\n" + "="*60)
-        print("🎮 HAND CONTROL SYSTEM - MAIN MENU")
+        print("HAND CONTROL SYSTEM")
         print("="*60)
         print("Select a mode with your hand:")
         print("   1️⃣  finger  = Drawing Mode")
@@ -143,33 +143,39 @@ class MainMenu(QWidget):
 
     def paintEvent(self, event):
         painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
         
-        # Semi-transparent background
-        painter.fillRect(self.rect(), Qt.transparent)
+        # Draw compact menu with white opaque background
+        menu_width = 365
+        menu_height = 220
+        margin = 20
         
-        # Draw menu UI
-        font = QFont('Arial', 20, QFont.Bold)
-        painter.setFont(font)
-        painter.setPen(QPen(Qt.white))
+        # Semi-transparent white background
+        painter.setBrush(QColor(255, 255, 255, 230))  # White with opacity
+        painter.setPen(QPen(QColor(0, 0, 0, 150), 2))
+        painter.drawRoundedRect(margin, margin, menu_width, menu_height, 10, 10)
         
         # Title
-        painter.drawText(50, 80, "🎮 HAND CONTROL MENU")
+        font = QFont('Arial', 16, QFont.Bold)
+        painter.setFont(font)
+        painter.setPen(QPen(Qt.black))
+        painter.drawText(margin + 10, margin + 30, "HAND CONTROL SYSTEM")
         
         # Instructions
-        small_font = QFont('Arial', 14)
+        small_font = QFont('Arial', 12)
         painter.setFont(small_font)
         
-        y_pos = 150
+        y_pos = margin + 60
         instructions = [
-            "1️⃣  1 finger  → Drawing Mode",
-            "🤟 3 fingers → Mouse Mode",
+            "👆 1 finger   → Drawing Mode",
+            "🤟 3 fingers → Mouse Mode", 
             "🖐️ 5 fingers → Gesture Mode",
-            "🖖 4 fingers → Quit"
+            "🖖 4 fingers → Quit Application"
         ]
         
         for instruction in instructions:
-            painter.drawText(50, y_pos, instruction)
-            y_pos += 40
+            painter.drawText(margin + 15, y_pos, instruction)
+            y_pos += 35
 
     def cleanup(self):
         if self.cap:

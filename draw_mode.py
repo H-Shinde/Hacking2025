@@ -4,12 +4,14 @@ import cv2
 import numpy as np
 import mediapipe as mp
 from PyQt5.QtWidgets import QApplication, QWidget
-from PyQt5.QtGui import QPainter, QPen, QImage, QCursor
+from PyQt5.QtGui import QPainter, QPen, QImage, QCursor, QColor, QFont
 from PyQt5.QtCore import Qt, QTimer
 import os
 from datetime import datetime
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from PIL import Image
+import pyautogui
+import time
 
 mp_hands = mp.solutions.hands
 
@@ -45,6 +47,10 @@ class DrawingMode(QWidget):
         self.stroke_count = 0
         self.max_strokes_before_optimize = 500
 
+        # Configure pyautogui for typing
+        pyautogui.FAILSAFE = False
+        pyautogui.PAUSE = 0.05  # Small delay between keystrokes for reliability
+
         self.timer = QTimer()
         self.timer.timeout.connect(self.update_frame)
         self.timer.start(8)
@@ -52,8 +58,8 @@ class DrawingMode(QWidget):
         print("\n✍️  DRAWING MODE ACTIVE")
         print("="*60)
         print("• Pinch thumb & index to pause, unpinch to draw")
-        print("• 🤟 3 fingers = Save & Run OCR")
-        print("• 🖐️ 5 fingers = Clear canvas")
+        print("• 🤟 3 fingers = Save, OCR & Type text")
+        print("• ✊ Fist = Clear canvas")
         print("• 🖖 4 fingers = Return to Menu")
         print("="*60 + "\n")
 
@@ -96,8 +102,36 @@ class DrawingMode(QWidget):
         
         return sum(fingers)
 
+    def is_fist(self, landmarks, frame_shape):
+        """Check if hand is making a fist (all fingers closed)"""
+        fingers = []
+        
+        # Thumb - check if thumb is across palm
+        thumb_tip = landmarks.landmark[4]
+        thumb_mcp = landmarks.landmark[2]
+        if thumb_tip.x > thumb_mcp.x:  # Thumb across palm
+            fingers.append(0)
+        else:
+            fingers.append(1)
+        
+        # Other fingers - check if tips are below PIP joints
+        finger_tips = [8, 12, 16, 20]
+        finger_pips = [6, 10, 14, 18]
+        
+        for tip_id, pip_id in zip(finger_tips, finger_pips):
+            tip = landmarks.landmark[tip_id]
+            pip = landmarks.landmark[pip_id]
+            if tip.y > pip.y:  # Finger tip below PIP joint (closed)
+                fingers.append(0)
+            else:
+                fingers.append(1)
+        
+        # Fist if no fingers are extended
+        return sum(fingers) == 0
+
     def check_gestures(self, landmarks, frame_shape):
         extended_fingers = self.count_extended_fingers(landmarks, frame_shape)
+        is_fist_gesture = self.is_fist(landmarks, frame_shape)
         
         self.gesture_cooldown = max(0, self.gesture_cooldown - 1)
         
@@ -108,7 +142,7 @@ class DrawingMode(QWidget):
         
         if extended_fingers == 3:
             gesture = "save"
-        elif extended_fingers == 5:
+        elif is_fist_gesture:
             gesture = "clear"
         elif extended_fingers == 4:
             gesture = "quit"
@@ -125,6 +159,40 @@ class DrawingMode(QWidget):
         self.last_smooth_pos = None
         self.stroke_count = 0
         print("🎨 Canvas cleared!")
+
+    def type_text(self, text):
+        """Type out text character by character using pyautogui"""
+        if not text or text.isspace():
+            print("❌ No text to type")
+            return
+        
+        print(f"⌨️  Typing: '{text}'")
+        
+        # Clean the text - remove extra spaces and normalize
+        cleaned_text = ' '.join(text.split())
+        
+        # Type each character with small delays
+        for char in cleaned_text:
+            if char == ' ':
+                pyautogui.press('space')
+            elif char == '\n':
+                pyautogui.press('enter')
+            elif char == '.':
+                pyautogui.press('.')
+            elif char == ',':
+                pyautogui.press(',')
+            elif char == '!':
+                pyautogui.press('!')
+            elif char == '?':
+                pyautogui.press('?')
+            else:
+                # For letters and numbers, use write (handles shift automatically)
+                pyautogui.write(char)
+            
+            # Small delay between characters for reliability
+            time.sleep(0.05)
+        
+        print("✅ Finished typing!")
 
     def save_image(self):
         try:
@@ -159,7 +227,16 @@ class DrawingMode(QWidget):
             generated_ids = model.generate(pixel_values)
             generated_text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0]
             
-            print(f"📝 Recognized text: '{generated_text}'\n")
+            print(f"📝 Recognized text: '{generated_text}'")
+            
+            # Type the recognized text
+            if generated_text.strip():
+                print("⌨️  Typing recognized text...")
+                self.type_text(generated_text)
+            else:
+                print("❌ No text recognized to type")
+            
+            print("\n")
             
         except Exception as e:
             print(f"❌ Error: {e}")
@@ -258,9 +335,26 @@ class DrawingMode(QWidget):
         painter = QPainter(self)
         painter.drawImage(0, 0, self.canvas)
         
-        # Display instructions
-        painter.setPen(QPen(Qt.white))
-        painter.drawText(10, 30, "✍️  Drawing Mode | 🤟 3=Save | 🖐️ 5=Clear | 🖖 4=Menu")
+        # Draw compact info panel with white opaque background
+        panel_width = 500
+        panel_height = 50
+        margin = 20
+        
+        # Semi-transparent white background
+        painter.setBrush(QColor(255, 255, 255, 230))  # White with opacity
+        painter.setPen(QPen(QColor(0, 0, 0, 150), 2))
+        painter.drawRoundedRect(margin, margin, panel_width, panel_height, 10, 10)
+        
+        # Status text
+        font = QFont('Arial', 12)
+        painter.setFont(font)
+        painter.setPen(QPen(Qt.black))
+        
+        status = "Drawing" if self.drawing else "Paused"
+        instructions = f"✍️ Drawing Mode | 🤟 3=Save & Type | ✊ Fist=Clear | 🖖 4=Menu | Status: {status}"
+        
+        painter.drawText(margin + 10, margin + 20, panel_width - 20, panel_height - 10, 
+                        Qt.AlignLeft | Qt.TextWordWrap, instructions)
 
     def cleanup(self):
         if self.cap:
