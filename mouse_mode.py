@@ -27,6 +27,7 @@ class MouseMode(QWidget):
         self.last_smooth_pos = None
         self.last_click_time = 0
         self.click_cooldown = 0.3
+        self.menu_visible = True  # Track menu visibility
         
         # Improved click/drag states
         self.is_dragging = False
@@ -53,6 +54,7 @@ class MouseMode(QWidget):
         print("• Hold pinch (>0.3s) = Drag/Select")
         print("• Double pinch = Double click")
         print("• 🤟 3 fingers = Right click")
+        print("• 🤘 Rock sign = Toggle menu")
         print("• 🖖 4 fingers = Return to Menu")
         print("="*60 + "\n")
 
@@ -117,6 +119,35 @@ class MouseMode(QWidget):
         # Fist if no fingers are extended
         return sum(fingers) == 0
 
+    def is_rock_sign(self, landmarks, frame_shape):
+        """Check for rock sign 🤘 (index + pinky extended)"""
+        fingers = []
+        
+        # Check thumb
+        thumb_tip = landmarks.landmark[4]
+        thumb_ip = landmarks.landmark[3]
+        fingers.append(1 if thumb_tip.x < thumb_ip.x else 0)
+        
+        # Check other fingers
+        finger_tips = [8, 12, 16, 20]
+        finger_pips = [6, 10, 14, 18]
+        
+        for tip_id, pip_id in zip(finger_tips, finger_pips):
+            tip = landmarks.landmark[tip_id]
+            pip = landmarks.landmark[pip_id]
+            fingers.append(1 if tip.y < pip.y else 0)
+        
+        # Index and pinky extended, middle and ring closed
+        # [thumb, index, middle, ring, pinky]
+        return fingers[1] == 1 and fingers[2] == 0 and fingers[3] == 0 and fingers[4] == 1
+
+    def toggle_menu_visibility(self):
+        """Toggle the info panel visibility"""
+        self.menu_visible = not self.menu_visible
+        self.update()  # Redraw to show/hide panel
+        status = "visible" if self.menu_visible else "hidden"
+        print(f"📋 Menu {status}")
+
     def quit_mode(self):
         print("👋 Returning to menu...")
         self.cleanup()
@@ -136,10 +167,11 @@ class MouseMode(QWidget):
             lm = results.multi_hand_landmarks[0].landmark
             current_time = time.time()
 
-            # Check for quit gesture (4 fingers)
+            # Check for gestures
             extended_fingers = self.count_extended_fingers(results.multi_hand_landmarks[0], frame.shape)
             self.gesture_cooldown = max(0, self.gesture_cooldown - 1)
             
+            # Check for quit gesture (4 fingers)
             if extended_fingers == 4 and self.gesture_cooldown == 0:
                 self.gesture_cooldown = 30
                 self.quit_mode()
@@ -152,6 +184,12 @@ class MouseMode(QWidget):
                     self.last_click_time = current_time
                     self.gesture_cooldown = 30
                     print("🖱️ Right Click!")
+                return
+
+            # Check for rock sign (toggle menu)
+            if self.is_rock_sign(results.multi_hand_landmarks[0], frame.shape) and self.gesture_cooldown == 0:
+                self.toggle_menu_visibility()
+                self.gesture_cooldown = 30
                 return
 
             # Index finger position
@@ -222,9 +260,13 @@ class MouseMode(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
+        # Only draw menu if visible
+        if not self.menu_visible:
+            return
+        
         # Draw compact info panel with white opaque background
-        panel_width = 550
-        panel_height = 100
+        panel_width = 600
+        panel_height = 120
         margin = 20
         
         # Semi-transparent white background
@@ -232,8 +274,8 @@ class MouseMode(QWidget):
         painter.setPen(QPen(QColor(0, 0, 0, 150), 2))
         painter.drawRoundedRect(margin, margin, panel_width, panel_height, 10, 10)
         
-        # Status text
-        font = QFont('Arial', 12)
+        # Title and status
+        font = QFont('Arial', 12, QFont.Bold)
         painter.setFont(font)
         painter.setPen(QPen(Qt.black))
         
@@ -243,11 +285,22 @@ class MouseMode(QWidget):
         elif self.was_pinched and not self.is_dragging:
             status = "⚪ READY TO CLICK"
             
-        instructions = f"🖱️ Mouse Mode | Pinch=Click | Hold=Drag | 🤟 3=Right Click | 🖖 4=Menu | Status: {status}"
+        title = f"🖱️ MOUSE MODE - Status: {status}"
+        painter.drawText(margin + 10, margin + 25, title)
         
-        # Wrap text if needed
-        painter.drawText(margin + 10, margin + 20, panel_width - 20, panel_height - 10, 
-                        Qt.AlignLeft | Qt.TextWordWrap, instructions)
+        # Instructions
+        small_font = QFont('Arial', 11)
+        painter.setFont(small_font)
+        
+        y_pos = margin + 50
+        instructions = [
+            "Pinch = Click/Drag  |  🤟 3 fingers = Right Click",
+            "🤘 Rock sign = Toggle menu  |  🖖 4 fingers = Menu"
+        ]
+        
+        for instruction in instructions:
+            painter.drawText(margin + 10, y_pos, instruction)
+            y_pos += 30
 
     def cleanup(self):
         # Release mouse button if held down

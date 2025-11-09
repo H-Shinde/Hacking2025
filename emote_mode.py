@@ -17,8 +17,11 @@ class GestureMode(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Gesture Mode")
-        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool)
+        self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint | Qt.Tool | Qt.WindowDoesNotAcceptFocus)
         self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents)
         self.showFullScreen()
 
         self.cap = cv2.VideoCapture(0)
@@ -29,6 +32,7 @@ class GestureMode(QWidget):
         self.gesture_delay = 1.0  # Minimum time between gestures
         self.clap_detected = False
         self.last_clap_time = 0
+        self.menu_visible = True  # Track menu visibility
 
         # Configure pyautogui
         pyautogui.FAILSAFE = False
@@ -45,8 +49,9 @@ class GestureMode(QWidget):
         print("• 🖐️ 5 fingers = Paste (Ctrl+V)")
         print("• 🤟 3 fingers = Save (Ctrl+S)")
         print("• 👍 Thumbs up = Enter")
-        print("• 👎 Thumbs down = File Explorer (Win+E)")
-        print("• 🤙 Call me = Settings (Win+I)")
+        print("• ✌️ Peace sign = Space")
+        print("• 🤙 Pinky only = Undo")
+        print("• 🤘 Rock sign = Toggle menu")
         print("• 👏 CLAP = SHUTDOWN (30s delay)")
         print("• 🖖 4 fingers = Return to Menu")
         print("="*60 + "\n")
@@ -130,21 +135,6 @@ class GestureMode(QWidget):
         # Only thumb extended, others closed
         return sum(fingers) == 1 and fingers[0] == 1
 
-    def is_thumbs_down(self, landmarks, frame_shape):
-        """Check for thumbs down gesture (only thumb extended, hand rotated)"""
-        extended_fingers = self.count_extended_fingers(landmarks, frame_shape)
-        
-        # For thumbs down, we expect only thumb extended
-        if extended_fingers != 1:
-            return False
-            
-        # Check thumb position relative to wrist
-        thumb_tip = landmarks.landmark[4]
-        wrist = landmarks.landmark[0]
-        
-        # In thumbs down, thumb is usually below wrist
-        return thumb_tip.y > wrist.y
-
     def is_peace_sign(self, landmarks, frame_shape):
         """Check for peace sign (index and middle fingers extended)"""
         extended_fingers = self.count_extended_fingers(landmarks, frame_shape)
@@ -169,34 +159,56 @@ class GestureMode(QWidget):
         pinky_closed = pinky_tip.y > pinky_pip.y
         
         return index_extended and middle_extended and ring_closed and pinky_closed
-
-    def is_call_me(self, landmarks, frame_shape):
-        """Check for 'call me' gesture (thumb and pinky extended)"""
-        extended_fingers = self.count_extended_fingers(landmarks, frame_shape)
+    
+    def is_pinky_only(self, landmarks, frame_shape):
+        """Check for pinky-only gesture (🤙 hang loose)"""
+        fingers = []
         
-        if extended_fingers != 2:
-            return False
-            
-        # Check which specific fingers are extended
+        # Thumb - should be closed or neutral
         thumb_tip = landmarks.landmark[4]
         thumb_ip = landmarks.landmark[3]
-        index_tip = landmarks.landmark[8]
-        index_pip = landmarks.landmark[6]
-        middle_tip = landmarks.landmark[12]
-        middle_pip = landmarks.landmark[10]
-        ring_tip = landmarks.landmark[16]
-        ring_pip = landmarks.landmark[14]
-        pinky_tip = landmarks.landmark[20]
-        pinky_pip = landmarks.landmark[18]
+        if thumb_tip.x < thumb_ip.x:
+            fingers.append(1)
+        else:
+            fingers.append(0)
         
-        # Thumb and pinky extended, others closed
-        thumb_extended = thumb_tip.x < thumb_ip.x
-        index_closed = index_tip.y > index_pip.y
-        middle_closed = middle_tip.y > middle_pip.y
-        ring_closed = ring_tip.y > ring_pip.y
-        pinky_extended = pinky_tip.y < pinky_pip.y
+        # Check each finger individually
+        finger_tips = [8, 12, 16, 20]  # index, middle, ring, pinky
+        finger_pips = [6, 10, 14, 18]
         
-        return thumb_extended and pinky_extended and index_closed and middle_closed and ring_closed
+        for tip_id, pip_id in zip(finger_tips, finger_pips):
+            tip = landmarks.landmark[tip_id]
+            pip = landmarks.landmark[pip_id]
+            if tip.y < pip.y:  # Extended
+                fingers.append(1)
+            else:
+                fingers.append(0)
+        
+        # Should be: thumb closed, index closed, middle closed, ring closed, pinky extended
+        # fingers = [thumb, index, middle, ring, pinky]
+        return fingers == [0, 0, 0, 0, 1] or fingers == [1, 0, 0, 0, 1]  # Allow thumb either way
+
+    def is_rock_sign(self, landmarks, frame_shape):
+        """Check for rock sign 🤘 (index + pinky extended)"""
+        fingers = []
+        
+        # Check thumb
+        thumb_tip = landmarks.landmark[4]
+        thumb_ip = landmarks.landmark[3]
+        fingers.append(1 if thumb_tip.x < thumb_ip.x else 0)
+        
+        # Check other fingers
+        finger_tips = [8, 12, 16, 20]
+        finger_pips = [6, 10, 14, 18]
+        
+        for tip_id, pip_id in zip(finger_tips, finger_pips):
+            tip = landmarks.landmark[tip_id]
+            pip = landmarks.landmark[pip_id]
+            fingers.append(1 if tip.y < pip.y else 0)
+        
+        # Index and pinky extended, middle and ring closed
+        # [thumb, index, middle, ring, pinky]
+        return fingers[1] == 1 and fingers[2] == 0 and fingers[3] == 0 and fingers[4] == 1
 
     def detect_clap(self, results, frame_shape):
         """Detect clapping motion with both hands"""
@@ -281,6 +293,13 @@ class GestureMode(QWidget):
             print(f"❌ Shutdown failed: {e}")
             return False
 
+    def toggle_menu_visibility(self):
+        """Toggle the info panel visibility"""
+        self.menu_visible = not self.menu_visible
+        self.update()  # Redraw to show/hide panel
+        status = "visible" if self.menu_visible else "hidden"
+        print(f"📋 Menu {status}")
+
     def execute_shortcut(self, gesture):
         """Execute Windows shortcut based on gesture"""
         current_time = time.time()
@@ -304,20 +323,24 @@ class GestureMode(QWidget):
             pyautogui.hotkey('ctrl', 's')
             print("💾 Save (Ctrl+S)")
             
+        elif gesture == "pinky_only":
+            # Undo (Ctrl+Z)
+            pyautogui.hotkey('ctrl', 'z')
+            print("↩ Undo (Ctrl+Z)")
+            
+        elif gesture == "peace_sign":
+            # Spacebar
+            pyautogui.press('space')
+            print("␣ Spacebar")
+
         elif gesture == "thumbs_up":
             # Enter
             pyautogui.press('enter')
             print("↵ Enter")
-            
-        elif gesture == "thumbs_down":
-            # File Explorer (Win+E)
-            pyautogui.hotkey('win', 'e')
-            print("📁 File Explorer (Win+E)")
-            
-        elif gesture == "call_me":
-            # Settings (Win+I)
-            pyautogui.hotkey('win', 'i')
-            print("⚙️ Settings (Win+I)")
+
+        elif gesture == "rock_sign":
+            # Toggle menu visibility
+            self.toggle_menu_visibility()
             
         elif gesture == "clap":
             # SHUTDOWN with 30 second delay
@@ -361,10 +384,12 @@ class GestureMode(QWidget):
             gesture = "three_fingers"
         elif self.is_thumbs_up(landmarks, frame_shape):
             gesture = "thumbs_up"
-        elif self.is_thumbs_down(landmarks, frame_shape):
-            gesture = "thumbs_down"
-        elif self.is_call_me(landmarks, frame_shape):
-            gesture = "call_me"
+        elif self.is_pinky_only(landmarks, frame_shape):
+            gesture = "pinky_only"
+        elif self.is_rock_sign(landmarks, frame_shape):
+            gesture = "rock_sign"
+        elif self.is_peace_sign(landmarks, frame_shape):
+            gesture = "peace_sign"
         elif extended_fingers == 4:
             gesture = "four_fingers"
             
@@ -406,9 +431,13 @@ class GestureMode(QWidget):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing)
         
+        # Only draw menu if visible
+        if not self.menu_visible:
+            return
+        
         # Draw compact info panel with white opaque background
         panel_width = 600
-        panel_height = 180
+        panel_height = 210
         margin = 20
         
         # Semi-transparent white background
@@ -430,8 +459,9 @@ class GestureMode(QWidget):
         instructions = [
             "✊ Fist = Copy (Ctrl+C)       🖐️ 5 fingers = Paste (Ctrl+V)",
             "🤟 3 fingers = Save (Ctrl+S)   👍 Thumbs up = Enter",
-            "👎 Thumbs down = File Explorer   🤙 Call me = Settings",
-            "👏 CLAP = SHUTDOWN (30s)      🖖 4 fingers = Menu"
+            "✌️ Peace sign = Space         🤙 Pinky only = Undo",
+            "🤘 Rock sign = Toggle menu    👏 CLAP = SHUTDOWN (30s)",
+            "🖖 4 fingers = Menu"
         ]
         
         for instruction in instructions:

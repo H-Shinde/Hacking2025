@@ -41,6 +41,7 @@ class DrawingMode(QWidget):
         self.drawing = False
         self.last_smooth_pos = None
         self.gesture_cooldown = 0
+        self.menu_visible = True  # Track menu visibility
         
         self.brush_size = 5
         self.min_movement = 2
@@ -60,6 +61,7 @@ class DrawingMode(QWidget):
         print("• Pinch thumb & index to pause, unpinch to draw")
         print("• 🤟 3 fingers = Save, OCR & Type text")
         print("• ✊ Fist = Clear canvas")
+        print("• 🤘 Rock sign = Toggle menu")
         print("• 🖖 4 fingers = Return to Menu")
         print("="*60 + "\n")
 
@@ -129,6 +131,35 @@ class DrawingMode(QWidget):
         # Fist if no fingers are extended
         return sum(fingers) == 0
 
+    def is_rock_sign(self, landmarks, frame_shape):
+        """Check for rock sign 🤘 (index + pinky extended)"""
+        fingers = []
+        
+        # Check thumb
+        thumb_tip = landmarks.landmark[4]
+        thumb_ip = landmarks.landmark[3]
+        fingers.append(1 if thumb_tip.x < thumb_ip.x else 0)
+        
+        # Check other fingers
+        finger_tips = [8, 12, 16, 20]
+        finger_pips = [6, 10, 14, 18]
+        
+        for tip_id, pip_id in zip(finger_tips, finger_pips):
+            tip = landmarks.landmark[tip_id]
+            pip = landmarks.landmark[pip_id]
+            fingers.append(1 if tip.y < pip.y else 0)
+        
+        # Index and pinky extended, middle and ring closed
+        # [thumb, index, middle, ring, pinky]
+        return fingers[1] == 1 and fingers[2] == 0 and fingers[3] == 0 and fingers[4] == 1
+
+    def toggle_menu_visibility(self):
+        """Toggle the info panel visibility"""
+        self.menu_visible = not self.menu_visible
+        self.update()  # Redraw to show/hide panel
+        status = "visible" if self.menu_visible else "hidden"
+        print(f"📋 Menu {status}")
+
     def check_gestures(self, landmarks, frame_shape):
         extended_fingers = self.count_extended_fingers(landmarks, frame_shape)
         is_fist_gesture = self.is_fist(landmarks, frame_shape)
@@ -144,6 +175,8 @@ class DrawingMode(QWidget):
             gesture = "save"
         elif is_fist_gesture:
             gesture = "clear"
+        elif self.is_rock_sign(landmarks, frame_shape):
+            gesture = "toggle_menu"
         elif extended_fingers == 4:
             gesture = "quit"
             
@@ -272,6 +305,8 @@ class DrawingMode(QWidget):
                     self.save_image()
                 elif gesture == "clear":
                     self.clear_canvas()
+                elif gesture == "toggle_menu":
+                    self.toggle_menu_visibility()
                 elif gesture == "quit":
                     self.quit_mode()
                     return
@@ -335,9 +370,13 @@ class DrawingMode(QWidget):
         painter = QPainter(self)
         painter.drawImage(0, 0, self.canvas)
         
+        # Only draw menu if visible
+        if not self.menu_visible:
+            return
+        
         # Draw compact info panel with white opaque background
-        panel_width = 500
-        panel_height = 50
+        panel_width = 550
+        panel_height = 120
         margin = 20
         
         # Semi-transparent white background
@@ -345,16 +384,28 @@ class DrawingMode(QWidget):
         painter.setPen(QPen(QColor(0, 0, 0, 150), 2))
         painter.drawRoundedRect(margin, margin, panel_width, panel_height, 10, 10)
         
-        # Status text
-        font = QFont('Arial', 12)
+        # Title and status
+        font = QFont('Arial', 12, QFont.Bold)
         painter.setFont(font)
         painter.setPen(QPen(Qt.black))
         
         status = "Drawing" if self.drawing else "Paused"
-        instructions = f"✍️ Drawing Mode | 🤟 3=Save & Type | ✊ Fist=Clear | 🖖 4=Menu | Status: {status}"
+        title = f"✍️ DRAWING MODE - Status: {status}"
+        painter.drawText(margin + 10, margin + 25, title)
         
-        painter.drawText(margin + 10, margin + 20, panel_width - 20, panel_height - 10, 
-                        Qt.AlignLeft | Qt.TextWordWrap, instructions)
+        # Instructions
+        small_font = QFont('Arial', 11)
+        painter.setFont(small_font)
+        
+        y_pos = margin + 50
+        instructions = [
+            "🤟 3 fingers = Save & Type  |  ✊ Fist = Clear canvas",
+            "🤘 Rock sign = Toggle menu  |  🖖 4 fingers = Menu"
+        ]
+        
+        for instruction in instructions:
+            painter.drawText(margin + 10, y_pos, instruction)
+            y_pos += 30
 
     def cleanup(self):
         if self.cap:
